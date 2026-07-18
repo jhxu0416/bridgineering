@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clinical Rule Authoring — grilling flow</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E🩺%3C/text%3E%3C/svg%3E" />
+    <style>
+      :root {
+        --ink: #1a1a1a;
+        --muted: #666;
+        --line: #e2e2e2;
+        --bg: #f6f7f9;
+        --card: #ffffff;
+        --blue: #1a56db;
+        --safety-bg: #fdecec; --safety-fg: #b3261e;
+        --oper-bg: #e8f0fe;  --oper-fg: #1a56db;
+        --prev-bg: #e6f4ea;  --prev-fg: #137333;
+        --amber-bg: #fff4e0; --amber-fg: #8a5a00; --amber-line: #f0a000;
+      }
+      * { box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        color: var(--ink); background: var(--bg); margin: 0; line-height: 1.5;
+      }
+      .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 80px; }
+      h1 { font-size: 22px; margin: 0 0 4px; }
+      .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+      .card {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+      }
+      label.fieldlbl { display:block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+      textarea {
+        width: 100%; min-height: 90px; font: inherit; padding: 12px; border: 1px solid var(--line);
+        border-radius: 8px; resize: vertical;
+      }
+      button {
+        font: inherit; font-weight: 600; border: 1px solid transparent; border-radius: 8px;
+        padding: 9px 16px; cursor: pointer; background: #eee; color: var(--ink);
+      }
+      button:disabled { opacity: .5; cursor: default; }
+      .btn-primary { background: var(--blue); color: #fff; }
+      .btn-accept { background: #137333; color: #fff; }
+      .btn-skip { background: #fff; color: var(--muted); border-color: var(--line); }
+      .btn-modify { background: #fff; color: var(--blue); border-color: var(--blue); }
+      .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+      .badge {
+        display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+        text-transform: uppercase; padding: 3px 8px; border-radius: 999px; margin-right: 6px;
+      }
+      .b-safety { background: var(--safety-bg); color: var(--safety-fg); }
+      .b-oper { background: var(--oper-bg); color: var(--oper-fg); }
+      .b-prev { background: var(--prev-bg); color: var(--prev-fg); }
+      .b-high { background: #b3261e; color: #fff; }
+      .b-medium { background: #f9ab00; color: #3c2f00; }
+      .b-low { background: #e0e0e0; color: #444; }
+      .b-unknown { background: #e0e0e0; color: #444; }
+      .b-grounded { background: var(--prev-bg); color: var(--prev-fg); }
+      .b-improvised { background: var(--amber-bg); color: var(--amber-fg); border: 1px dashed var(--amber-line); }
+
+      .decomp-row { display: grid; grid-template-columns: 140px 1fr; gap: 8px 14px; align-items: baseline; }
+      .decomp-row .k { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
+      .decomp-row .v { font-size: 15px; }
+      .decomp-row .v.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+
+      .rule-quote { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
+      .refs { list-style: none; padding: 0; margin: 8px 0 0; }
+      .refs li { border-left: 3px solid var(--line); padding: 6px 0 6px 12px; margin-bottom: 8px; }
+      .refs li .src { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+      .case { border-left: 4px solid var(--line); }
+      .case.safety { border-left-color: var(--safety-fg); }
+      .case.operational { border-left-color: var(--oper-fg); }
+      .case.prevalence { border-left-color: var(--prev-fg); }
+      .case.mode2 { border-style: dashed; }
+      .case .q { font-size: 17px; font-weight: 600; margin: 12px 0 8px; }
+      .case .why { color: #333; margin: 0 0 12px; }
+      .stat {
+        display: inline-flex; align-items: baseline; gap: 8px; background: var(--prev-bg);
+        color: var(--prev-fg); border-radius: 8px; padding: 8px 12px; margin: 4px 0 6px;
+      }
+      .stat .num { font-size: 22px; font-weight: 800; }
+      .gap {
+        background: var(--amber-bg); color: var(--amber-fg); border: 1px dashed var(--amber-line);
+        border-radius: 8px; padding: 8px 12px; margin: 4px 0 6px; font-size: 14px;
+      }
+      .progress { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+      .muted { color: var(--muted); }
+      .hidden { display: none; }
+
+      .banner {
+        border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; font-size: 14px;
+      }
+      .banner-error { background: var(--safety-bg); color: var(--safety-fg); border: 1px solid #f3c2bd; }
+      .banner-caveat { background: var(--amber-bg); color: var(--amber-fg); border: 1px solid var(--amber-line); }
+      .banner-clean { background: var(--prev-bg); color: var(--prev-fg); border: 1px solid #bfe3c9; }
+
+      /* modal */
+      .overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex;
+        align-items: center; justify-content: center; padding: 20px;
+      }
+      .modal { background: #fff; border-radius: 12px; padding: 22px; max-width: 440px; }
+      .modal h3 { margin: 0 0 8px; }
+      .spinner { color: var(--muted); font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Clinical Rule Authoring</h1>
+      <p class="sub">Write a rule in plain English. We decompose it, then grill it — safety, operational, and prevalence — against the patient panel before it goes live.</p>
+
+      <div id="err" class="banner banner-error hidden"></div>
+
+      <!-- INPUT -->
+      <section id="screen-input">
+        <div class="card">
+          <label class="fieldlbl" for="rule">Clinical rule</label>
+          <textarea id="rule">When a patient mentions rectal bleeding, remind the clinician to refer to GI.</textarea>
+          <div class="btn-row">
+            <button id="analyze-btn" class="btn-primary">Analyze</button>
+            <span id="analyze-busy" class="spinner hidden">Analyzing…</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- DECOMPOSITION -->
+      <section id="screen-decomp" class="hidden">
+        <div class="card">
+          <div class="progress">Step 1 — interpreted rule</div>
+          <div id="decomp-body" class="decomp-row"></div>
+          <div class="btn-row">
+            <button id="grill-btn" class="btn-primary">Begin grilling →</button>
+            <span id="grill-busy" class="spinner hidden">Grilling against the patient panel…</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- GRILLING -->
+      <section id="screen-grill" class="hidden">
+        <div class="card">
+          <div class="progress">Working rule</div>
+          <div id="working-rule"></div>
+        </div>
+        <div id="case-host"></div>
+      </section>
+
+      <!-- TERMINAL -->
+      <section id="screen-terminal" class="hidden">
+        <div id="terminal-host"></div>
+      </section>
+    </div>
+
+    <!-- modal host -->
+    <div id="modal-host"></div>
+
+    <script>
+      // ---------------- state ----------------
+      const state = {
+        rule: "",
+        decomposition: null,
+        cases: [],
+        idx: 0,
+        refinements: [], // {angle, clause, source, modified}
+        openFlags: [],   // high-severity safety cases that were skipped
+        activated: false,
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const show = (id) => {
+        ["screen-input", "screen-decomp", "screen-grill", "screen-terminal"].forEach(
+          (s) => $(s).classList.toggle("hidden", s !== id)
+        );
+      };
+      const showError = (msg) => {
+        const e = $("err");
+        e.textContent = msg;
+        e.classList.remove("hidden");
+      };
+      const clearError = () => $("err").classList.add("hidden");
+
+      async function api(path, body) {
+        const res = await fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        let data = null;
+        try { data = await res.json(); } catch (_) {}
+        if (!res.ok) {
+          const detail = (data && data.detail) || `HTTP ${res.status}`;
+          throw new Error(detail);
+        }
+        return data;
+      }
+
+      // small DOM helper
+      function el(tag, props = {}, ...children) {
+        const n = document.createElement(tag);
+        for (const [k, v] of Object.entries(props)) {
+          if (k === "class") n.className = v;
+          else if (k === "text") n.textContent = v;
+          else if (k === "html") n.innerHTML = v;
+          else n.setAttribute(k, v);
+        }
+        for (const c of children) if (c) n.append(c);
+        return n;
+      }
+
+      // ---------------- step 1: analyze ----------------
+      $("analyze-btn").addEventListener("click", onAnalyze);
+      async function onAnalyze() {
+        clearError();
+        const rule = $("rule").value.trim();
+        if (!rule) { showError("Please enter a rule."); return; }
+        state.rule = rule;
+        $("analyze-btn").disabled = true;
+        $("analyze-busy").classList.remove("hidden");
+        try {
+          state.decomposition = await api("/api/decompose", { rule });
+          renderDecomp();
+          show("screen-decomp");
+        } catch (e) {
+          showError(e.message);
+        } finally {
+          $("analyze-btn").disabled = false;
+          $("analyze-busy").classList.add("hidden");
+        }
+      }
+
+      function renderDecomp() {
+        const d = state.decomposition;
+        const host = $("decomp-body");
+        host.replaceChildren(
+          el("div", { class: "k", text: "Listen for" }),
+          el("div", { class: "v", text: d.listen_for }),
+          el("div", { class: "k", text: "EHR condition" }),
+          el("div", { class: "v mono", text: d.ehr_condition }),
+          el("div", { class: "k", text: "Action" }),
+          el("div", { class: "v", text: d.action })
+        );
+      }
+
+      // ---------------- step 2: grill ----------------
+      $("grill-btn").addEventListener("click", onBeginGrill);
+      async function onBeginGrill() {
+        clearError();
+        $("grill-btn").disabled = true;
+        $("grill-busy").classList.remove("hidden");
+        try {
+          const d = state.decomposition;
+          const resp = await api("/api/grill", { rule: state.rule, ...d });
+          state.cases = resp.corner_cases || [];
+          state.idx = 0;
+          show("screen-grill");
+          renderWorkingRule();
+          if (state.cases.length === 0) { goTerminal(); return; }
+          renderCurrentCase();
+        } catch (e) {
+          showError(e.message);
+        } finally {
+          $("grill-btn").disabled = false;
+          $("grill-busy").classList.add("hidden");
+        }
+      }
+
+      function renderWorkingRule() {
+        const host = $("working-rule");
+        host.replaceChildren(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
+        if (state.refinements.length) {
+          const ul = el("ul", { class: "refs" });
+          for (const r of state.refinements) {
+            const li = el("li", {},
+              el("div", {}, angleBadge(r.angle), document.createTextNode(r.clause)),
+              el("div", { class: "src", text: "addresses: " + r.source })
+            );
+            ul.append(li);
+          }
+          host.append(el("div", { class: "progress", text: "Refinements applied" }), ul);
+        } else {
+          host.append(el("div", { class: "muted", text: "No refinements yet." }));
+        }
+      }
+
+      function angleBadge(angle) {
+        const map = { safety: "b-safety", operational: "b-oper", prevalence: "b-prev" };
+        return el("span", { class: "badge " + (map[angle] || "b-low"), text: angle });
+      }
+      function sevBadge(t) {
+        return el("span", { class: "badge b-" + (t || "unknown"), text: "severity: " + (t || "unknown") });
+      }
+      function modeBadge(grounded) {
+        return grounded
+          ? el("span", { class: "badge b-grounded", text: "grounded" })
+          : el("span", { class: "badge b-improvised", text: "data gap" });
+      }
+
+      function renderCurrentCase() {
+        const c = state.cases[state.idx];
+        const host = $("case-host");
+        const card = el("div", {
+          class: "card case " + c.angle + (c.grounded ? "" : " mode2"),
+        });
+
+        card.append(
+          el("div", { class: "progress", text: `Corner case ${state.idx + 1} of ${state.cases.length} — safety cases shown first` }),
+          el("div", {}, angleBadge(c.angle), sevBadge(c.severity_tier), modeBadge(c.grounded)),
+          el("div", { class: "q", text: c.question }),
+          el("p", { class: "why", text: c.why_it_matters })
+        );
+
+        // grounded number (Mode 1) vs data gap (Mode 2) — visually distinct
+        if (c.prevalence_note) {
+          if (c.grounded) {
+            const pct = extractPct(c.prevalence_note);
+            const chip = el("div", { class: "stat" });
+            if (pct) chip.append(el("span", { class: "num", text: pct }));
+            chip.append(el("span", { text: c.prevalence_note }));
+            card.append(chip);
+          } else {
+            card.append(el("div", { class: "gap", text: "⚠ " + c.prevalence_note }));
+          }
+        }
+
+        const row = el("div", { class: "btn-row" });
+        const acceptBtn = el("button", { class: "btn-accept", text: "Accept" });
+        const modifyBtn = el("button", { class: "btn-modify", text: "Modify" });
+        const skipBtn = el("button", { class: "btn-skip", text: "Skip" });
+        acceptBtn.addEventListener("click", onAccept);
+        modifyBtn.addEventListener("click", onModify);
+        skipBtn.addEventListener("click", onSkip);
+        row.append(acceptBtn, modifyBtn, skipBtn);
+        card.append(row);
+
+        host.replaceChildren(card);
+      }
+
+      function extractPct(note) {
+        const m = String(note).match(/(\d+)%/);
+        return m ? m[0] : null;
+      }
+
+      function suggestedClause(c) {
+        if (!c.grounded) return "Flag this as a data gap and require manual clinician review until the field is captured.";
+        if (c.angle === "safety") return "Escalate urgency for this subgroup — never suppress the reminder for them.";
+        if (c.angle === "operational") return "Suppress this reminder when the recommended action is already in progress.";
+        return "Narrow the rule to higher-yield patients and de-prioritize this low-yield subgroup.";
+      }
+
+      function onAccept() {
+        const c = state.cases[state.idx];
+        state.refinements.push({
+          angle: c.angle, clause: suggestedClause(c),
+          source: c.prevalence_note || c.question, modified: false,
+        });
+        advance();
+      }
+
+      function onModify() {
+        const c = state.cases[state.idx];
+        const host = $("case-host");
+        const ta = el("textarea", {});
+        ta.value = suggestedClause(c);
+        const save = el("button", { class: "btn-primary", text: "Save refinement" });
+        const cancel = el("button", { class: "btn-skip", text: "Cancel" });
+        save.addEventListener("click", () => {
+          const text = ta.value.trim();
+          if (!text) return;
+          state.refinements.push({
+            angle: c.angle, clause: text,
+            source: c.prevalence_note || c.question, modified: true,
+          });
+          advance();
+        });
+        cancel.addEventListener("click", renderCurrentCase);
+        host.append(
+          el("div", { class: "card" },
+            el("label", { class: "fieldlbl", text: "Edit the refinement clause" }),
+            ta,
+            el("div", { class: "btn-row" }, save, cancel)
+          )
+        );
+      }
+
+      function onSkip() {
+        const c = state.cases[state.idx];
+        const isHighSafety = c.angle === "safety" && c.severity_tier === "high";
+        if (isHighSafety) {
+          openModal(
+            "Skip a high-severity safety case?",
+            "This rule will ship with an acknowledged, unresolved safety flag. You can still proceed — but it will be recorded and shown on the final rule.",
+            () => { state.openFlags.push(c); advance(); }
+          );
+          return;
+        }
+        advance();
+      }
+
+      function advance() {
+        state.idx += 1;
+        renderWorkingRule();
+        if (state.idx >= state.cases.length) { goTerminal(); return; }
+        renderCurrentCase();
+      }
+
+      // ---------------- terminal ----------------
+      function goTerminal() {
+        show("screen-terminal");
+        renderTerminal();
+      }
+
+      function renderTerminal() {
+        const host = $("terminal-host");
+        host.replaceChildren();
+
+        // persistent caveat banner for open safety flags
+        if (state.openFlags.length) {
+          const b = el("div", { class: "banner banner-caveat" });
+          b.append(el("strong", { text: "⚠ Ships with " + state.openFlags.length + " unresolved safety flag" + (state.openFlags.length > 1 ? "s" : "") + ":" }));
+          const ul = el("ul", { style: "margin:8px 0 0; padding-left:18px;" });
+          for (const f of state.openFlags) ul.append(el("li", { text: f.question }));
+          b.append(ul);
+          host.append(b);
+        }
+
+        const card = el("div", { class: "card" });
+
+        if (state.cases.length === 0) {
+          // CLEAN
+          host.append(el("div", { class: "banner banner-clean", html: "<strong>✓ Clean rule.</strong> All three angles — safety, operational, and prevalence — were checked and nothing needs to change." }));
+          card.append(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
+        } else if (state.activated) {
+          card.append(el("h2", { text: state.openFlags.length ? "Rule activated — with caveats" : "Rule activated ✓" }));
+          card.append(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
+          appendRefs(card);
+        } else {
+          // RESOLVED
+          const heading = state.refinements.length ? "Review the tightened rule" : "Nothing changed — review before activating";
+          card.append(el("div", { class: "progress", text: heading }));
+          card.append(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
+          appendRefs(card);
+        }
+
+        if (!state.activated) {
+          const row = el("div", { class: "btn-row" });
+          const activate = el("button", { class: "btn-primary", text: state.openFlags.length ? "Activate anyway" : "Activate rule" });
+          activate.addEventListener("click", () => { state.activated = true; renderTerminal(); });
+          const restart = el("button", { class: "btn-skip", text: "Start over" });
+          restart.addEventListener("click", () => location.reload());
+          row.append(activate, restart);
+          card.append(row);
+        } else {
+          card.append(el("div", { class: "btn-row" },
+            (() => { const b = el("button", { class: "btn-skip", text: "Author another rule" }); b.addEventListener("click", () => location.reload()); return b; })()
+          ));
+        }
+
+        host.append(card);
+      }
+
+      function appendRefs(card) {
+        if (!state.refinements.length) {
+          card.append(el("div", { class: "muted", text: "No refinements applied." }));
+          return;
+        }
+        const ul = el("ul", { class: "refs" });
+        for (const r of state.refinements) {
+          ul.append(el("li", {},
+            el("div", {}, angleBadge(r.angle), document.createTextNode(r.clause + (r.modified ? " (edited)" : ""))),
+            el("div", { class: "src", text: "addresses: " + r.source })
+          ));
+        }
+        card.append(el("div", { class: "progress", text: "Refinements applied" }), ul);
+      }
+
+      // ---------------- modal ----------------
+      function openModal(title, message, onConfirm) {
+        const host = $("modal-host");
+        const proceed = el("button", { class: "btn-primary", text: "Proceed" });
+        const cancel = el("button", { class: "btn-skip", text: "Go back" });
+        proceed.addEventListener("click", () => { host.replaceChildren(); onConfirm(); });
+        cancel.addEventListener("click", () => host.replaceChildren());
+        host.replaceChildren(
+          el("div", { class: "overlay" },
+            el("div", { class: "modal" },
+              el("h3", { text: title }),
+              el("p", { text: message }),
+              el("div", { class: "btn-row" }, proceed, cancel)
+            )
+          )
+        );
+      }
+    </script>
+  </body>
+</html>
