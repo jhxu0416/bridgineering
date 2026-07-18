@@ -22,7 +22,9 @@ from dotenv import load_dotenv
 
 from app import prevalence, severity
 from app.prompts.decompose import DECOMPOSE_SYSTEM_PROMPT
+from app.prompts.discuss import DISCUSS_SYSTEM_PROMPT
 from app.prompts.grilling import GRILLING_SYSTEM_PROMPT
+from app.prompts.playbooks import PLAYBOOKS_SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -54,6 +56,56 @@ DECOMPOSE_TOOL = {
             },
         },
         "required": ["listen_for", "ehr_condition", "action"],
+    },
+}
+
+PLAYBOOKS_TOOL = {
+    "name": "emit_playbooks",
+    "description": "Return the two audience-specific playbooks for the finalized rule.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "clinical_playbook": {
+                "type": "object",
+                "description": "Clinical-language summary for the CMO and clinicians (no tech/data terms).",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "when_it_fires": {"type": "string"},
+                    "clinical_rationale": {"type": "string"},
+                    "how_it_was_tightened": {"type": "array", "items": {"type": "string"}},
+                    "what_to_tell_clinicians": {"type": "array", "items": {"type": "string"}},
+                    "caveats": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "summary", "when_it_fires", "clinical_rationale",
+                    "how_it_was_tightened", "what_to_tell_clinicians", "caveats",
+                ],
+            },
+            "tech_playbook": {
+                "type": "string",
+                "description": "CLAUDE.md-style markdown spec for the engineering team to configure the CDS.",
+            },
+        },
+        "required": ["clinical_playbook", "tech_playbook"],
+    },
+}
+
+DISCUSS_TOOL = {
+    "name": "emit_discussion_turn",
+    "description": "Return the reviewer's next turn in the per-case grilling conversation.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "reply": {
+                "type": "string",
+                "description": "the reviewer's next message to the CMO (concise, specific, on this case)",
+            },
+            "proposed_refinement": {
+                "type": "string",
+                "description": "the current best single rule-edit clause reflecting the discussion so far",
+            },
+        },
+        "required": ["reply", "proposed_refinement"],
     },
 }
 
@@ -204,9 +256,102 @@ def decompose(rule: str) -> dict:
     return tool_block.input
 
 
+def discuss(rule: str, decomposition: dict, case: dict, messages: list[dict]) -> dict:
+    """One turn of a continuous per-case grilling conversation.
+
+    `messages` is the transcript so far: [{"role": "cmo"|"assistant", "text": ...}].
+    Returns {"reply", "proposed_refinement"}. Stateless — the browser holds the
+    transcript and re-sends it each turn (no persistence, per CLAUDE.md). The facts
+    are recomputed deterministically here so the LLM only cites, never counts.
+    """
+    facts = build_grounded_facts()
+    conversation = [
+        {"speaker": "CMO" if m.get("role") == "cmo" else "Reviewer", "text": m.get("text", "")}
+        for m in messages
+    ]
+    payload = {
+        "rule_plain_english": rule,
+        "structured_rule": decomposition,
+        "corner_case": {
+            "angle": case.get("angle"),
+            "question": case.get("question"),
+            "why_it_matters": case.get("why_it_matters"),
+            "grounded": case.get("grounded"),
+            "prevalence_note": case.get("prevalence_note"),
+            "severity_tier": case.get("severity_tier"),
+        },
+        "computed_facts": [_fact_view(f) for f in facts],
+        "conversation": conversation,
+    }
+    user_content = (
+        "Continue grilling this ONE corner case with the CMO. All numbers below are "
+        "precomputed — cite them verbatim and never invent a number. Respond with your "
+        "next turn via emit_discussion_turn.\n\n"
+        + json.dumps(payload, indent=2)
+    )
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        system=DISCUSS_SYSTEM_PROMPT,
+        tools=[DISCUSS_TOOL],
+        tool_choice={"type": "tool", "name": "emit_discussion_turn"},
+        messages=[{"role": "user", "content": user_content}],
+    )
+    tool_block = next(b for b in resp.content if b.type == "tool_use")
+    return tool_block.input
+
+
 def grill_rule(rule: str, decomposition: dict) -> list[dict]:
     """Full grill pipeline for a rule: build facts, then grill. Reused by /api/grill."""
     return grill(rule, decomposition, build_grounded_facts())
+
+
+def build_playbooks(rule: str, decomposition: dict, refinements: list[dict],
+                    open_flags: list[dict]) -> dict:
+    """Generate the Clinical + Tech playbooks for a finalized (activated) rule.
+
+    Returns {"clinical_playbook": {...}, "tech_playbook": "<markdown>"}. Reuses the
+    deterministic facts so the LLM only cites numbers, never computes them.
+    """
+    facts = build_grounded_facts()
+    payload = {
+        "rule_plain_english": rule,
+        "structured_rule": decomposition,
+        "accepted_refinements": [
+            {
+                "angle": r.get("angle"),
+                "clause": r.get("clause"),
+                "addresses": r.get("source"),
+            }
+            for r in refinements
+        ],
+        "open_safety_flags": [
+            {
+                "angle": f.get("angle"),
+                "question": f.get("question"),
+                "severity_tier": f.get("severity_tier"),
+                "why_it_matters": f.get("why_it_matters"),
+            }
+            for f in open_flags
+        ],
+        "computed_facts": [_fact_view(f) for f in facts],
+    }
+    user_content = (
+        "The CMO has activated this CDS reminder rule. Write the two playbooks that "
+        "summarize the finalized rule. All numbers below are precomputed — cite them "
+        "verbatim and never invent a number. Emit both via emit_playbooks.\n\n"
+        + json.dumps(payload, indent=2)
+    )
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        system=PLAYBOOKS_SYSTEM_PROMPT,
+        tools=[PLAYBOOKS_TOOL],
+        tool_choice={"type": "tool", "name": "emit_playbooks"},
+        messages=[{"role": "user", "content": user_content}],
+    )
+    tool_block = next(b for b in resp.content if b.type == "tool_use")
+    return tool_block.input
 
 
 # ---------------------------------------------------------------------------

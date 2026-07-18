@@ -89,6 +89,35 @@
       .muted { color: var(--muted); }
       .hidden { display: none; }
 
+      /* per-case discussion */
+      .round-badge {
+        display: inline-block; font-size: 12px; font-weight: 700; color: var(--oper-fg);
+        background: var(--oper-bg); padding: 4px 10px; border-radius: 999px; margin: 14px 0 10px;
+      }
+      .transcript { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+      .turn { padding: 8px 12px; border-radius: 10px; max-width: 92%; white-space: pre-wrap; }
+      .turn .who { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; color: var(--muted); }
+      .turn.cmo { align-self: flex-end; background: #eef2ff; }
+      .turn.reviewer { align-self: flex-start; background: #f3f4f6; }
+
+      /* dual playbooks (tabbed) */
+      .tabs { display: flex; gap: 4px; margin: 20px 0 0; border-bottom: 1px solid var(--line); }
+      .tab {
+        background: transparent; border: none; border-bottom: 2px solid transparent;
+        border-radius: 0; padding: 10px 16px; color: var(--muted); font-weight: 600;
+      }
+      .tab:hover { color: var(--ink); }
+      .tab.active { color: var(--ink); border-bottom-color: var(--blue); }
+      .card.playbook { border-top-left-radius: 0; border-top-right-radius: 0; }
+      .sec-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 4px; }
+      .pb-list { margin: 4px 0 0; padding-left: 18px; }
+      .pb-list li { margin-bottom: 6px; }
+      .mono-block {
+        background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px; overflow: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5;
+        white-space: pre-wrap; word-break: break-word; max-height: 560px; margin-top: 8px;
+      }
+
       .banner {
         border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; font-size: 14px;
       }
@@ -165,6 +194,11 @@
         refinements: [], // {angle, clause, source, modified}
         openFlags: [],   // high-severity safety cases that were skipped
         activated: false,
+        discuss: null,   // per-case conversation: { messages, round, proposed }
+        playbooks: null,        // { clinical_playbook, tech_playbook }
+        playbooksLoading: false,
+        playbooksError: null,
+        playbookTab: "clinical", // active tab: "clinical" | "tech"
       };
 
       const $ = (id) => document.getElementById(id);
@@ -296,44 +330,51 @@
           : el("span", { class: "badge b-improvised", text: "data gap" });
       }
 
-      function renderCurrentCase() {
-        const c = state.cases[state.idx];
-        const host = $("case-host");
-        const card = el("div", {
-          class: "card case " + c.angle + (c.grounded ? "" : " mode2"),
-        });
+      function caseCard(c) {
+        return el("div", { class: "card case " + c.angle + (c.grounded ? "" : " mode2") });
+      }
 
-        card.append(
+      // The shared case header (badges + question + why + grounded stat / data gap),
+      // reused by both the plain case view and the discussion view.
+      function caseSummaryNode(c) {
+        const wrap = el("div", {});
+        wrap.append(
           el("div", { class: "progress", text: `Corner case ${state.idx + 1} of ${state.cases.length} — safety cases shown first` }),
           el("div", {}, angleBadge(c.angle), sevBadge(c.severity_tier), modeBadge(c.grounded)),
           el("div", { class: "q", text: c.question }),
           el("p", { class: "why", text: c.why_it_matters })
         );
-
-        // grounded number (Mode 1) vs data gap (Mode 2) — visually distinct
         if (c.prevalence_note) {
           if (c.grounded) {
             const pct = extractPct(c.prevalence_note);
             const chip = el("div", { class: "stat" });
             if (pct) chip.append(el("span", { class: "num", text: pct }));
             chip.append(el("span", { text: c.prevalence_note }));
-            card.append(chip);
+            wrap.append(chip);
           } else {
-            card.append(el("div", { class: "gap", text: "⚠ " + c.prevalence_note }));
+            wrap.append(el("div", { class: "gap", text: "⚠ " + c.prevalence_note }));
           }
         }
+        return wrap;
+      }
 
-        const row = el("div", { class: "btn-row" });
+      function renderCurrentCase() {
+        const c = state.cases[state.idx];
+        // fresh conversation for each case
+        state.discuss = { messages: [], round: 1, proposed: suggestedClause(c) };
+
+        const card = caseCard(c);
+        card.append(caseSummaryNode(c));
+
         const acceptBtn = el("button", { class: "btn-accept", text: "Accept" });
         const modifyBtn = el("button", { class: "btn-modify", text: "Modify" });
         const skipBtn = el("button", { class: "btn-skip", text: "Skip" });
-        acceptBtn.addEventListener("click", onAccept);
+        acceptBtn.addEventListener("click", () => applyRefinement(suggestedClause(c), false));
         modifyBtn.addEventListener("click", onModify);
         skipBtn.addEventListener("click", onSkip);
-        row.append(acceptBtn, modifyBtn, skipBtn);
-        card.append(row);
+        card.append(el("div", { class: "btn-row" }, acceptBtn, modifyBtn, skipBtn));
 
-        host.replaceChildren(card);
+        $("case-host").replaceChildren(card);
       }
 
       function extractPct(note) {
@@ -348,39 +389,114 @@
         return "Narrow the rule to higher-yield patients and de-prioritize this low-yield subgroup.";
       }
 
-      function onAccept() {
+      function applyRefinement(clause, discussed) {
         const c = state.cases[state.idx];
         state.refinements.push({
-          angle: c.angle, clause: suggestedClause(c),
-          source: c.prevalence_note || c.question, modified: false,
+          angle: c.angle, clause: clause,
+          source: c.prevalence_note || c.question, modified: discussed,
         });
         advance();
       }
 
+      function caseForApi(c) {
+        return {
+          angle: c.angle,
+          question: c.question,
+          why_it_matters: c.why_it_matters || "",
+          grounded: !!c.grounded,
+          prevalence_note: c.prevalence_note || "",
+          severity_tier: c.severity_tier || "unknown",
+        };
+      }
+
+      // Modify now opens a continuous grilling conversation on THIS case,
+      // running until the CMO clicks Accept or Skip.
       function onModify() {
+        state.discuss.messages = [];
+        state.discuss.round = 1;
+        state.discuss.proposed = suggestedClause(state.cases[state.idx]);
+        renderCaseDiscussion();
+      }
+
+      function renderCaseDiscussion(opts = {}) {
         const c = state.cases[state.idx];
-        const host = $("case-host");
-        const ta = el("textarea", {});
-        ta.value = suggestedClause(c);
-        const save = el("button", { class: "btn-primary", text: "Save refinement" });
-        const cancel = el("button", { class: "btn-skip", text: "Cancel" });
-        save.addEventListener("click", () => {
-          const text = ta.value.trim();
-          if (!text) return;
-          state.refinements.push({
-            angle: c.angle, clause: text,
-            source: c.prevalence_note || c.question, modified: true,
-          });
-          advance();
-        });
-        cancel.addEventListener("click", renderCurrentCase);
-        host.append(
-          el("div", { class: "card" },
-            el("label", { class: "fieldlbl", text: "Edit the refinement clause" }),
-            ta,
-            el("div", { class: "btn-row" }, save, cancel)
-          )
+        const card = caseCard(c);
+        card.append(caseSummaryNode(c));
+        card.append(el("div", { class: "round-badge", text: "Discussion — round " + state.discuss.round }));
+
+        if (state.discuss.messages.length === 0) {
+          card.append(el("div", { class: "muted", text: "Reply below to grill this case further. The reviewer keeps responding — and refining the clause — until you Accept or Skip." }));
+        } else {
+          const tx = el("div", { class: "transcript" });
+          for (const m of state.discuss.messages) {
+            tx.append(el("div", { class: "turn " + (m.role === "cmo" ? "cmo" : "reviewer") },
+              el("div", { class: "who", text: m.role === "cmo" ? "You (CMO)" : "Reviewer" }),
+              el("div", { text: m.text })
+            ));
+          }
+          card.append(tx);
+        }
+
+        if (opts.busy) card.append(el("div", { class: "spinner", text: "Reviewer is responding…" }));
+
+        // CMO's next message
+        const input = el("textarea", { placeholder: "Push back, add context, or refine intent…" });
+        if (opts.inputValue) input.value = opts.inputValue;
+        const sendBtn = el("button", { class: "btn-primary", text: "Send" });
+        sendBtn.addEventListener("click", () => onSend(input.value));
+        card.append(
+          el("label", { class: "fieldlbl", text: "Your reply" }),
+          input,
+          el("div", { class: "btn-row" }, sendBtn)
         );
+
+        // editable proposed refinement — what Accept will apply
+        const prop = el("textarea", {});
+        prop.value = state.discuss.proposed || "";
+        card.append(
+          el("div", { class: "progress", text: "Proposed refinement — what Accept will apply" }),
+          prop
+        );
+
+        const acceptBtn = el("button", { class: "btn-accept", text: "Accept refinement" });
+        const skipBtn = el("button", { class: "btn-skip", text: "Skip" });
+        acceptBtn.addEventListener("click", () => applyRefinement(prop.value.trim() || suggestedClause(c), true));
+        skipBtn.addEventListener("click", onSkip);
+        card.append(el("div", { class: "btn-row" }, acceptBtn, skipBtn));
+
+        if (opts.busy) {
+          for (const b of card.querySelectorAll("button, textarea")) b.disabled = true;
+        }
+
+        $("case-host").replaceChildren(card);
+      }
+
+      async function onSend(text) {
+        text = (text || "").trim();
+        if (!text) return;
+        clearError();
+        state.discuss.messages.push({ role: "cmo", text });
+        renderCaseDiscussion({ busy: true });
+        try {
+          const c = state.cases[state.idx];
+          const d = state.decomposition;
+          const resp = await api("/api/discuss", {
+            rule: state.rule,
+            listen_for: d.listen_for,
+            ehr_condition: d.ehr_condition,
+            action: d.action,
+            case: caseForApi(c),
+            messages: state.discuss.messages,
+          });
+          state.discuss.messages.push({ role: "assistant", text: resp.reply });
+          if (resp.proposed_refinement) state.discuss.proposed = resp.proposed_refinement;
+          state.discuss.round += 1;
+          renderCaseDiscussion();
+        } catch (e) {
+          state.discuss.messages.pop(); // roll back the optimistic message
+          showError(e.message);
+          renderCaseDiscussion({ inputValue: text });
+        }
       }
 
       function onSkip() {
@@ -426,37 +542,139 @@
 
         const card = el("div", { class: "card" });
 
-        if (state.cases.length === 0) {
-          // CLEAN
-          host.append(el("div", { class: "banner banner-clean", html: "<strong>✓ Clean rule.</strong> All three angles — safety, operational, and prevalence — were checked and nothing needs to change." }));
-          card.append(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
-        } else if (state.activated) {
+        if (state.activated) {
+          // ACTIVATED (clean or resolved) — confirmation + playbooks below
           card.append(el("h2", { text: state.openFlags.length ? "Rule activated — with caveats" : "Rule activated ✓" }));
           card.append(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
           appendRefs(card);
+          card.append(el("div", { class: "btn-row" },
+            (() => { const b = el("button", { class: "btn-skip", text: "Author another rule" }); b.addEventListener("click", () => location.reload()); return b; })()
+          ));
+          host.append(card);
+          renderPlaybooksSection(host);
+          return;
+        }
+
+        // NOT YET ACTIVATED — clean vs resolved review
+        if (state.cases.length === 0) {
+          host.append(el("div", { class: "banner banner-clean", html: "<strong>✓ Clean rule.</strong> All three angles — safety, operational, and prevalence — were checked and nothing needs to change." }));
+          card.append(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
         } else {
-          // RESOLVED
           const heading = state.refinements.length ? "Review the tightened rule" : "Nothing changed — review before activating";
           card.append(el("div", { class: "progress", text: heading }));
           card.append(el("p", { class: "rule-quote", text: "“" + state.rule + "”" }));
           appendRefs(card);
         }
 
-        if (!state.activated) {
-          const row = el("div", { class: "btn-row" });
-          const activate = el("button", { class: "btn-primary", text: state.openFlags.length ? "Activate anyway" : "Activate rule" });
-          activate.addEventListener("click", () => { state.activated = true; renderTerminal(); });
-          const restart = el("button", { class: "btn-skip", text: "Start over" });
-          restart.addEventListener("click", () => location.reload());
-          row.append(activate, restart);
-          card.append(row);
-        } else {
-          card.append(el("div", { class: "btn-row" },
-            (() => { const b = el("button", { class: "btn-skip", text: "Author another rule" }); b.addEventListener("click", () => location.reload()); return b; })()
-          ));
-        }
-
+        const row = el("div", { class: "btn-row" });
+        const activate = el("button", { class: "btn-primary", text: state.openFlags.length ? "Activate anyway" : "Activate rule" });
+        activate.addEventListener("click", () => { state.activated = true; generatePlaybooks(); });
+        const restart = el("button", { class: "btn-skip", text: "Start over" });
+        restart.addEventListener("click", () => location.reload());
+        row.append(activate, restart);
+        card.append(row);
         host.append(card);
+      }
+
+      // ---------------- playbooks (post-activation) ----------------
+      async function generatePlaybooks() {
+        state.playbooksLoading = true;
+        state.playbooksError = null;
+        renderTerminal();
+        try {
+          const d = state.decomposition || { listen_for: "", ehr_condition: "", action: "" };
+          state.playbooks = await api("/api/playbooks", {
+            rule: state.rule,
+            listen_for: d.listen_for,
+            ehr_condition: d.ehr_condition,
+            action: d.action,
+            refinements: state.refinements,
+            open_flags: state.openFlags,
+          });
+        } catch (e) {
+          state.playbooksError = "Playbook generation failed: " + e.message;
+        } finally {
+          state.playbooksLoading = false;
+          renderTerminal();
+        }
+      }
+
+      function renderPlaybooksSection(host) {
+        if (state.playbooksLoading) {
+          host.append(el("div", { class: "card" }, el("div", { class: "spinner", text: "Generating playbooks…" })));
+          return;
+        }
+        if (state.playbooksError) {
+          const c = el("div", { class: "card" });
+          c.append(el("div", { class: "banner banner-error", text: state.playbooksError }));
+          const retry = el("button", { class: "btn-primary", text: "Retry" });
+          retry.addEventListener("click", generatePlaybooks);
+          c.append(el("div", { class: "btn-row" }, retry));
+          host.append(c);
+          return;
+        }
+        if (state.playbooks) renderPlaybooks(host);
+      }
+
+      function pbSection(container, title, text) {
+        if (!text) return;
+        container.append(el("div", { class: "sec-title", text: title }), el("p", { text: text }));
+      }
+      function pbList(container, title, items) {
+        if (!items || !items.length) return;
+        const ul = el("ul", { class: "pb-list" });
+        for (const it of items) ul.append(el("li", { text: it }));
+        container.append(el("div", { class: "sec-title", text: title }), ul);
+      }
+
+      function renderPlaybooks(host) {
+        const pb = state.playbooks;
+
+        const tabs = el("div", { class: "tabs" });
+        const clinicalTab = el("button", { class: "tab", text: "🩺 Clinical Playbook" });
+        const techTab = el("button", { class: "tab", text: "⚙️ Tech Playbook" });
+        tabs.append(clinicalTab, techTab);
+
+        const content = el("div", { class: "card playbook" });
+
+        function setTab(which) {
+          state.playbookTab = which;
+          clinicalTab.classList.toggle("active", which === "clinical");
+          techTab.classList.toggle("active", which === "tech");
+          content.replaceChildren();
+          if (which === "tech") renderTech(content, pb.tech_playbook || "");
+          else renderClinical(content, pb.clinical_playbook || {});
+        }
+        clinicalTab.addEventListener("click", () => setTab("clinical"));
+        techTab.addEventListener("click", () => setTab("tech"));
+
+        host.append(tabs, content);
+        setTab(state.playbookTab === "tech" ? "tech" : "clinical");
+      }
+
+      function renderClinical(container, cp) {
+        container.append(el("div", { class: "muted", text: "For CMO review & communication to clinicians" }));
+        if (cp.summary) container.append(el("p", { text: cp.summary }));
+        pbSection(container, "When it fires", cp.when_it_fires);
+        pbSection(container, "Clinical rationale", cp.clinical_rationale);
+        pbList(container, "How it was tightened", cp.how_it_was_tightened);
+        pbList(container, "What to tell clinicians", cp.what_to_tell_clinicians);
+        pbList(container, "Caveats", cp.caveats);
+      }
+
+      function renderTech(container, md) {
+        const copyBtn = el("button", { class: "btn-modify", text: "Copy for Claude" });
+        copyBtn.addEventListener("click", () => {
+          navigator.clipboard.writeText(md).then(() => {
+            copyBtn.textContent = "Copied ✓";
+            setTimeout(() => (copyBtn.textContent = "Copy for Claude"), 1500);
+          });
+        });
+        container.append(
+          el("div", { class: "muted", text: "For the CDS engineering team — paste into Claude" }),
+          el("div", { class: "btn-row" }, copyBtn),
+          el("pre", { class: "mono-block", text: md })
+        );
       }
 
       function appendRefs(card) {
@@ -467,7 +685,7 @@
         const ul = el("ul", { class: "refs" });
         for (const r of state.refinements) {
           ul.append(el("li", {},
-            el("div", {}, angleBadge(r.angle), document.createTextNode(r.clause + (r.modified ? " (edited)" : ""))),
+            el("div", {}, angleBadge(r.angle), document.createTextNode(r.clause + (r.modified ? " (refined)" : ""))),
             el("div", { class: "src", text: "addresses: " + r.source })
           ));
         }

@@ -38,6 +38,44 @@ class GrillRequest(BaseModel):
     action: str
 
 
+class DiscussMessage(BaseModel):
+    role: str  # "cmo" | "assistant"
+    text: str
+
+
+class DiscussCase(BaseModel):
+    angle: str
+    question: str
+    why_it_matters: str = ""
+    grounded: bool = False
+    prevalence_note: str = ""
+    severity_tier: str = "unknown"
+
+
+class DiscussRequest(BaseModel):
+    rule: str
+    listen_for: str
+    ehr_condition: str
+    action: str
+    case: DiscussCase
+    messages: list[DiscussMessage]
+
+
+class PlaybookRefinement(BaseModel):
+    angle: str
+    clause: str
+    source: str = ""
+
+
+class PlaybookRequest(BaseModel):
+    rule: str
+    listen_for: str
+    ehr_condition: str
+    action: str
+    refinements: list[PlaybookRefinement] = []
+    open_flags: list[DiscussCase] = []
+
+
 # ---- routes ---------------------------------------------------------------
 
 @app.get("/")
@@ -73,3 +111,39 @@ def grill(req: GrillRequest):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Grill failed: {e}")
     return {"corner_cases": corner_cases}
+
+
+@app.post("/api/discuss")
+def discuss(req: DiscussRequest):
+    decomposition = {
+        "listen_for": req.listen_for,
+        "ehr_condition": req.ehr_condition,
+        "action": req.action,
+    }
+    try:
+        return grilling.discuss(
+            req.rule,
+            decomposition,
+            req.case.model_dump(),
+            [m.model_dump() for m in req.messages],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Discuss failed: {e}")
+
+
+@app.post("/api/playbooks")
+def playbooks(req: PlaybookRequest):
+    decomposition = {
+        "listen_for": req.listen_for,
+        "ehr_condition": req.ehr_condition,
+        "action": req.action,
+    }
+    try:
+        return grilling.build_playbooks(
+            req.rule,
+            decomposition,
+            [r.model_dump() for r in req.refinements],
+            [f.model_dump() for f in req.open_flags],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Playbooks failed: {e}")
