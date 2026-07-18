@@ -358,7 +358,7 @@ def build_playbooks(rule: str, decomposition: dict, refinements: list[dict],
 # Gating test:  uv run python -m app.grilling [N]
 # ---------------------------------------------------------------------------
 
-SEED_RULE = "When a patient mentions rectal bleeding, remind the clinician to refer to GI."
+SEED_RULE = "If a patient 45+ reports rectal bleeding — especially with a change in bowel habits, unintentional weight loss, or iron-deficiency anemia — refer to GI for colonoscopy."
 SEED_DECOMP = {
     "listen_for": "patient mentions rectal bleeding",
     "ehr_condition": "mentioned_rectal_bleeding == true",
